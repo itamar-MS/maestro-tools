@@ -26,8 +26,8 @@ def write_runs_file(runs: List[Dict[str, Any]], output_dir: str) -> str:
     """
     tz = ZoneInfo("Asia/Jerusalem")
     now_local = datetime.now(tz)
-    # Match n8n's format 'yyyy-MM-dd-hh-mm' where 'hh' is 12-hour clock
-    file_name = now_local.strftime("langchain-runs-%Y-%m-%d-%I-%M.txt")
+    # Format: 'yyyy-MM-dd-hh-mm' where 'hh' is 24-hour clock
+    file_name = now_local.strftime("langchain-runs-%Y-%m-%d-%H-%M.txt")
     os.makedirs(output_dir, exist_ok=True)
     file_path = os.path.join(output_dir, file_name)
 

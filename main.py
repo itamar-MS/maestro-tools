@@ -82,8 +82,8 @@ Examples:
     
     parser.add_argument(
         "--hours",
-        type=int,
-        default=24,
+        type=float,
+        default=24.0,
         metavar="N",
         help="Time window in hours to fetch runs (default: 24)"
     )
