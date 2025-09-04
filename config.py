@@ -27,7 +27,7 @@ class Config:
     aws_region: str = "us-east-1"
     
     # Output settings
-    output_dir: str = "/Users/itamarshiryan/maestro-tools/langsmith-exports"
+    output_dir: str = "langsmith-exports"
     
     # Logging
     log_level: str = "INFO"
