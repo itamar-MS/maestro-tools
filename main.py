@@ -34,8 +34,7 @@ except ImportError:  # pragma: no cover
 
 from config import Config
 from langsmith_client import LangSmithClient
-from data_processor import deduplicate_by_thread_latest
-from file_manager import write_runs_file
+from file_manager import write_runs_files
 from s3_uploader import S3Uploader
 from stats_calculator import calculate_export_stats, log_export_stats
 
@@ -162,25 +161,27 @@ def main() -> int:
             },
         )
         
-        # Fetch runs from LangSmith
+        # Fetch runs from LangSmith (includes deduplication and enrichment)
         client = LangSmithClient(config)
-        all_runs = client.fetch_all_runs(start_time=start_time, end_time=end_time, debug_limit=debug_limit)
+        deduped_runs = client.fetch_all_runs(start_time=start_time, end_time=end_time, debug_limit=debug_limit)
         
-        # Deduplicate runs
-        deduped_runs = deduplicate_by_thread_latest(all_runs)
-        
-        # Write JSON file
-        file_path = write_runs_file(deduped_runs, output_dir=config.output_dir)
+        # Write JSON files (full and summary)
+        full_file_path, summary_file_path = write_runs_files(deduped_runs, output_dir=config.output_dir)
         
         # Optional S3 upload
         if upload_to_s3:
             uploader = S3Uploader(config)
-            s3_url = uploader.upload_file(file_path)
             
-            if s3_url:
-                logging.info("✅ File uploaded to S3 successfully.")
+            # Upload both files
+            full_s3_url = uploader.upload_file(full_file_path)
+            summary_s3_url = uploader.upload_file(summary_file_path)
+            
+            if full_s3_url and summary_s3_url:
+                logging.info("✅ Both files uploaded to S3 successfully.")
+            elif full_s3_url or summary_s3_url:
+                logging.warning("⚠️ Only one file uploaded to S3 successfully, but local files saved.")
             else:
-                logging.warning("⚠️ S3 upload failed, but local file saved.")
+                logging.warning("⚠️ S3 upload failed for both files, but local files saved.")
         
         # Calculate and display statistics
         stats = calculate_export_stats(deduped_runs)

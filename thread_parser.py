@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any, List
+from datetime import datetime
 
 
 def parse_thread_id(thread_id: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -38,15 +39,150 @@ def parse_thread_id(thread_id: Optional[str]) -> Tuple[Optional[str], Optional[s
     return user_id.strip(), lesson_id.strip()
 
 
+def _get_nested_value(obj: Dict[str, Any], path: List[str]) -> Any:
+    """Safely get nested value from dictionary."""
+    current = obj
+    for key in path:
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+        else:
+            return None
+    return current
+
+
+def _pick_first_valid(*values) -> Any:
+    """Return the first non-None, non-empty value."""
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _role_from_type(message_type: str) -> str:
+    """Convert LangChain message type to role."""
+    if not message_type:
+        return "assistant"
+    if message_type.endswith("SystemMessage"):
+        return "system"
+    if message_type.endswith("HumanMessage"):
+        return "user"
+    return "assistant"  # AIMessage / AIMessageChunk
+
+
+def _extract_content(message: Dict[str, Any]) -> str:
+    """Extract content from message object."""
+    content = _pick_first_valid(
+        _get_nested_value(message, ["kwargs", "content"]),
+        _get_nested_value(message, ["kwargs", "lc_kwargs", "lc_kwargs", "content"]),
+        _get_nested_value(message, ["content"])
+    )
+    return str(content or "")
+
+
+def _extract_timestamp(message: Dict[str, Any]) -> Optional[str]:
+    """Extract timestamp from message object."""
+    return _pick_first_valid(
+        _get_nested_value(message, ["kwargs", "additional_kwargs", "timestamp"]),
+        _get_nested_value(message, ["additional_kwargs", "timestamp"])
+    )
+
+
+def _analyze_conversation(run: Dict[str, Any]) -> Dict[str, Any]:
+    """Analyze conversation messages and extract metrics."""
+    messages = _get_nested_value(run, ["outputs", "messages"]) or []
+    
+    if not isinstance(messages, list):
+        return {
+            "message_count": 0,
+            "user_messages": 0,
+            "assistant_messages": 0,
+            "system_messages": 0,
+            "first_msg_time": None,
+            "last_msg_time": None,
+            "total_time_minutes": None,
+            "time_since_last_message_minutes": None
+        }
+    
+    count_user = 0
+    count_assistant = 0
+    count_system = 0
+    first_msg_time = None
+    last_msg_time = None
+    
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+            
+        # Determine role
+        message_id = message.get("id") or _get_nested_value(message, ["kwargs", "id"]) or []
+        type_name = message_id[-1] if isinstance(message_id, list) and message_id else str(message_id or "")
+        role = _role_from_type(type_name)
+        
+        # Count by role
+        if role == "user":
+            count_user += 1
+        elif role == "assistant":
+            count_assistant += 1
+        elif role == "system":
+            count_system += 1
+        
+        # Track timestamps
+        timestamp = _extract_timestamp(message)
+        if timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                iso_time = dt.isoformat()
+                
+                if not first_msg_time or dt < datetime.fromisoformat(first_msg_time.replace('Z', '+00:00')):
+                    first_msg_time = iso_time
+                if not last_msg_time or dt > datetime.fromisoformat(last_msg_time.replace('Z', '+00:00')):
+                    last_msg_time = iso_time
+            except (ValueError, TypeError):
+                continue
+    
+    # Calculate duration
+    total_time_minutes = None
+    if first_msg_time and last_msg_time:
+        try:
+            first_dt = datetime.fromisoformat(first_msg_time.replace('Z', '+00:00'))
+            last_dt = datetime.fromisoformat(last_msg_time.replace('Z', '+00:00'))
+            total_ms = (last_dt - first_dt).total_seconds() * 1000
+            total_time_minutes = total_ms / 1000 / 60
+        except (ValueError, TypeError):
+            pass
+    
+    # Calculate time since last message
+    time_since_last_message_minutes = None
+    if last_msg_time:
+        try:
+            last_dt = datetime.fromisoformat(last_msg_time.replace('Z', '+00:00'))
+            now = datetime.now(last_dt.tzinfo)
+            time_since_last_message_minutes = (now - last_dt).total_seconds() / 60
+        except (ValueError, TypeError):
+            pass
+    
+    return {
+        "message_count": len(messages),
+        "user_messages": count_user,
+        "assistant_messages": count_assistant,
+        "system_messages": count_system,
+        "first_msg_time": first_msg_time,
+        "last_msg_time": last_msg_time,
+        "total_time_minutes": total_time_minutes,
+        "time_since_last_message_minutes": time_since_last_message_minutes
+    }
+
+
 def enrich_run_with_thread_data(run: dict) -> dict:
     """
-    Enrich a run dictionary with parsed user_id and lesson_id from thread_id.
+    Enrich a run dictionary with parsed user_id, lesson_id from thread_id,
+    and conversation analysis metrics.
     
     Args:
         run: Run dictionary from LangSmith API
         
     Returns:
-        Enhanced run dictionary with user_id and lesson_id fields
+        Enhanced run dictionary with user_id, lesson_id, and conversation metrics
     """
     if not isinstance(run, dict):
         return run
@@ -54,11 +190,14 @@ def enrich_run_with_thread_data(run: dict) -> dict:
     # Create a copy to avoid modifying the original
     enriched_run = run.copy()
     
+    # Parse thread_id
     thread_id = run.get("thread_id")
     user_id, lesson_id = parse_thread_id(thread_id)
-    
-    # Add parsed fields
     enriched_run["user_id"] = user_id
     enriched_run["lesson_id"] = lesson_id
+    
+    # Analyze conversation
+    conversation_metrics = _analyze_conversation(run)
+    enriched_run.update(conversation_metrics)
     
     return enriched_run

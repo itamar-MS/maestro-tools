@@ -1,0 +1,72 @@
+name: LangSmith Export
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'Time window in hours to fetch runs'
+        required: false
+        default: '24'
+        type: string
+      output:
+        description: 'Output options (json, s3, or json,s3)'
+        required: false
+        default: 's3'
+        type: choice
+        options:
+          - 'json'
+          - 's3'
+          - 'json,s3'
+      debug_limit:
+        description: 'Debug mode: limit to N runs (leave empty for no limit)'
+        required: false
+        type: string
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Create .env file from secrets
+      run: |
+        echo "LANGSMITH_API_KEY=${{ secrets.LANGSMITH_API_KEY }}" >> .env
+        echo "LS_SESSION_IDS=${{ secrets.LS_SESSION_IDS }}" >> .env
+        echo "S3_BUCKET_NAME=${{ secrets.S3_BUCKET_NAME }}" >> .env
+        echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env
+        echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env
+        echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> .env
+    
+    - name: Run LangSmith export
+      run: |
+        # Build command with inputs
+        CMD="python3 main.py --output ${{ inputs.output }} --hours ${{ inputs.hours }}"
+        
+        # Add debug limit if provided
+        if [ -n "${{ inputs.debug_limit }}" ]; then
+          CMD="$CMD --debug ${{ inputs.debug_limit }}"
+        fi
+        
+        echo "Running: $CMD"
+        $CMD
+    
+    - name: Upload artifacts (if not using S3)
+      if: ${{ !contains(inputs.output, 's3') }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: langsmith-export-${{ github.run_number }}
+        path: |
+          langsmith-exports/*.txt
+        retention-days: 30

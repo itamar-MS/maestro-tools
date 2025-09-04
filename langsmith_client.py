@@ -13,14 +13,14 @@ except ImportError:  # pragma: no cover
     from backports.zoneinfo import ZoneInfo  # type: ignore
 
 from config import Config
+from data_processor import _parse_iso
+from thread_parser import enrich_run_with_thread_data
 
 LANGSMITH_QUERY_URL = "https://api.smith.langchain.com/api/v1/runs/query"
 
 # Constants
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = 60
-ESTIMATION_MIN_PAGES = 2
-RECENT_PAGES_SAMPLE = 3
 
 
 def _to_iso(dt: datetime) -> str:
@@ -105,6 +105,69 @@ class LangSmithClient:
         """Check if we should stop due to debug limit."""
         return debug_limit is not None and len(all_runs) >= debug_limit
     
+    def _clean_empty_fields(self, run: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove empty fields from a run to reduce JSON size."""
+        if not isinstance(run, dict):
+            return run
+        
+        cleaned = {}
+        for key, value in run.items():
+            # Skip empty values (None, empty strings, empty lists, empty dicts)
+            if value is None:
+                continue
+            elif isinstance(value, str) and value.strip() == "":
+                continue
+            elif isinstance(value, (list, dict)) and len(value) == 0:
+                continue
+            else:
+                # Recursively clean nested dictionaries
+                if isinstance(value, dict):
+                    cleaned_value = self._clean_empty_fields(value)
+                    if cleaned_value:  # Only add if not empty after cleaning
+                        cleaned[key] = cleaned_value
+                else:
+                    cleaned[key] = value
+        
+        return cleaned
+    
+    def _deduplicate_incrementally(self, new_runs: List[Dict[str, Any]], existing_runs_by_thread: Dict[str, Dict[str, Any]]) -> int:
+        """
+        Deduplicate new runs against existing ones, keeping only the latest per thread_id.
+        Updates the existing_runs_by_thread dict in place.
+        
+        Returns:
+            Number of runs that were excluded as duplicates
+        """
+        duplicates_excluded = 0
+        
+        for run in new_runs:
+            thread_id = (run or {}).get("thread_id")
+            if not thread_id:
+                # Keep items without thread_id uniquely by id to avoid accidental drops
+                thread_id = f"_no_thread_{(run or {}).get('id', len(existing_runs_by_thread))}"
+            
+            ts = _parse_iso((run or {}).get("start_time"))
+            
+            existing = existing_runs_by_thread.get(thread_id)
+            if not existing:
+                # Enrich, clean, and store new run
+                enriched_run = enrich_run_with_thread_data(run)
+                cleaned_run = self._clean_empty_fields(enriched_run)
+                existing_runs_by_thread[thread_id] = cleaned_run
+            else:
+                existing_ts = _parse_iso((existing or {}).get("start_time"))
+                if ts > existing_ts:
+                    # Replace with newer run
+                    enriched_run = enrich_run_with_thread_data(run)
+                    cleaned_run = self._clean_empty_fields(enriched_run)
+                    existing_runs_by_thread[thread_id] = cleaned_run
+                    duplicates_excluded += 1
+                else:
+                    # Keep existing, exclude this one
+                    duplicates_excluded += 1
+        
+        return duplicates_excluded
+    
     def _log_page_progress(self, page_index: int, runs_fetched: int, total_runs: int, estimation_info: str) -> None:
         """Log progress information for the current page."""
         logging.info(
@@ -116,11 +179,12 @@ class LangSmithClient:
         )
     
     def fetch_all_runs(self, start_time: datetime, end_time: datetime, debug_limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Fetch all runs from LangSmith API with pagination."""
-        all_runs: List[Dict[str, Any]] = []
+        """Fetch all runs from LangSmith API with pagination and incremental deduplication."""
+        runs_by_thread: Dict[str, Dict[str, Any]] = {}
         page_index = 0
-        runs_per_page_history: List[int] = []
         cursor = ""
+        total_duplicates_excluded = 0
+        total_runs_fetched = 0
 
         while True:
             page_index += 1
@@ -134,23 +198,25 @@ class LangSmithClient:
             if not isinstance(runs, list):
                 raise RuntimeError("Unexpected response format: 'runs' is not a list")
 
-            # Update collections
-            all_runs.extend(runs)
-            runs_per_page_history.append(len(runs))
+            total_runs_fetched += len(runs)
+            
+            # Deduplicate incrementally
+            duplicates_excluded = self._deduplicate_incrementally(runs, runs_by_thread)
+            total_duplicates_excluded += duplicates_excluded
 
             # Get next cursor
             next_cursor = (data.get("cursors") or {}).get("next")
 
-            # Generate estimation and log progress
-            estimation_info = self._estimate_progress(
-                runs_per_page_history, len(all_runs), bool(next_cursor), start_time, end_time, all_runs
-            )
-            self._log_page_progress(page_index, len(runs), len(all_runs), estimation_info)
+            # Log progress
+            has_more = "has more pages" if next_cursor else "completed"
+            self._log_page_progress(page_index, len(runs), len(runs_by_thread), has_more)
 
-            # Check debug mode limit
-            if self._should_stop_debug_mode(all_runs, debug_limit):
-                logging.info("🐛 Debug mode enabled: stopping after %d runs.", debug_limit)
-                all_runs = all_runs[:debug_limit]  # Trim to exact limit
+            # Check debug mode limit (based on unique runs after deduplication)
+            if self._should_stop_debug_mode(list(runs_by_thread.values()), debug_limit):
+                logging.info("🐛 Debug mode enabled: stopping after %d unique runs.", debug_limit)
+                # Trim to exact limit
+                unique_runs = list(runs_by_thread.values())[:debug_limit]
+                runs_by_thread = {run.get('thread_id', f'_no_thread_{i}'): run for i, run in enumerate(unique_runs)}
                 break
 
             # Continue pagination or finish
@@ -160,47 +226,12 @@ class LangSmithClient:
             else:
                 break
 
-        return all_runs
-    
-    def _estimate_progress(
-        self, 
-        runs_per_page_history: List[int], 
-        total_runs_so_far: int, 
-        has_next_cursor: bool,
-        start_time: datetime,
-        end_time: datetime,
-        all_runs: List[Dict[str, Any]]
-    ) -> str:
-        """Estimate progress and remaining runs based on available data."""
-        if not has_next_cursor:
-            return "100% completed"
-        
-        if len(runs_per_page_history) < ESTIMATION_MIN_PAGES:
-            return "estimating..."
-        
-        estimated_remaining_runs = self._calculate_remaining_runs_estimate(runs_per_page_history)
-        estimated_total = total_runs_so_far + estimated_remaining_runs
-        
-        # Calculate progress percentage
-        progress_percent = int((total_runs_so_far / estimated_total) * 100) if estimated_total > 0 else 0
-        progress_percent = min(progress_percent, 95)  # Cap at 95% since we're estimating
-        
-        return f"{progress_percent}% complete"
-    
-    def _calculate_remaining_runs_estimate(self, runs_per_page_history: List[int]) -> int:
-        """Calculate estimated remaining runs based on page history patterns."""
-        avg_runs_per_page = sum(runs_per_page_history) / len(runs_per_page_history)
-        recent_pages = runs_per_page_history[-RECENT_PAGES_SAMPLE:]
-        recent_avg = sum(recent_pages) / len(recent_pages)
-        
-        # If recent pages are getting smaller, we might be near the end
-        if self._is_trending_downward(recent_avg, avg_runs_per_page, len(runs_per_page_history)):
-            estimated_remaining_pages = 1 + len([x for x in recent_pages if x > 0])
-            return int(recent_avg * estimated_remaining_pages)
-        else:
-            # Use conservative estimate based on average
-            return int(avg_runs_per_page * 2)
-    
-    def _is_trending_downward(self, recent_avg: float, overall_avg: float, total_pages: int) -> bool:
-        """Check if recent pages show a downward trend indicating we're near the end."""
-        return recent_avg < overall_avg * 0.5 and total_pages > 3
+        # Log final deduplication stats
+        final_runs = list(runs_by_thread.values())
+        logging.info("Total runs fetched from API: %s", total_runs_fetched)
+        logging.info("Total runs after deduplication: %s", len(final_runs))
+        logging.info("Total excluded as older duplicates: %s", total_duplicates_excluded)
+        logging.info("Enriched runs with user_id and lesson_id from thread_id")
+        logging.info("Cleaned empty fields from all runs")
+
+        return final_runs
