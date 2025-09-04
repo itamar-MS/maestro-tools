@@ -64,7 +64,7 @@ jobs:
     
     - name: Upload artifacts (if not using S3)
       if: ${{ !contains(inputs.output, 's3') }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: langsmith-export-${{ github.run_number }}
         path: |

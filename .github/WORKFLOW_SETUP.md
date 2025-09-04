@@ -8,6 +8,16 @@ Before using the workflow, you need to add the following secrets to your GitHub 
 
 ### Go to: Repository Settings → Secrets and variables → Actions → New repository secret
 
+**Example values:**
+```
+LANGSMITH_API_KEY=ls_your_api_key_here
+LS_SESSION_IDS=session1,session2,session3
+S3_BUCKET_NAME=your-bucket-name
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_REGION=us-east-1
+```
+
 ### Required Secrets:
 
 #### LangSmith Configuration
