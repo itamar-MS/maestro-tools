@@ -31,11 +31,11 @@ def write_runs_files(runs: List[Dict[str, Any]], output_dir: str) -> tuple[str, 
     os.makedirs(output_dir, exist_ok=True)
     
     # Full file (with outputs)
-    full_file_name = f"langchain-runs-full-{timestamp}.txt"
+    full_file_name = f"{timestamp}-langchain-runs-full.txt"
     full_file_path = os.path.join(output_dir, full_file_name)
     
     # Summary file (without outputs)
-    summary_file_name = f"langchain-runs-summary-{timestamp}.txt"
+    summary_file_name = f"{timestamp}-langchain-runs-summary.txt"
     summary_file_path = os.path.join(output_dir, summary_file_name)
     
     # Create summary runs without outputs field

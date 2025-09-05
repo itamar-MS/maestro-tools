@@ -87,6 +87,59 @@ def _extract_timestamp(message: Dict[str, Any]) -> Optional[str]:
     )
 
 
+def _simplify_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert complex LangChain messages to simplified format with timing."""
+    if not isinstance(messages, list):
+        return []
+    
+    simplified_messages = []
+    previous_timestamp = None
+    
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        
+        # Extract message type and role
+        message_id = message.get("id") or _get_nested_value(message, ["kwargs", "id"]) or []
+        type_name = message_id[-1] if isinstance(message_id, list) and message_id else str(message_id or "")
+        sender = _role_from_type(type_name)
+        
+        # Extract content
+        content = _extract_content(message)
+        if not content:
+            continue  # Skip empty messages
+        
+        # Extract timestamp
+        timestamp_str = _extract_timestamp(message)
+        if not timestamp_str:
+            continue  # Skip messages without timestamps
+        
+        # Parse timestamp and calculate time since previous
+        try:
+            current_timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            iso_time = current_timestamp.isoformat()
+            
+            # Calculate time since previous message
+            time_since_previous_seconds = None
+            if previous_timestamp:
+                time_diff = (current_timestamp - previous_timestamp).total_seconds()
+                time_since_previous_seconds = round(time_diff, 3)
+            
+            simplified_messages.append({
+                "timestamp": iso_time,
+                "sender": sender,
+                "message": content,
+                "time_since_previous_seconds": time_since_previous_seconds
+            })
+            
+            previous_timestamp = current_timestamp
+            
+        except (ValueError, TypeError):
+            continue  # Skip messages with invalid timestamps
+    
+    return simplified_messages
+
+
 def _analyze_conversation(run: Dict[str, Any]) -> Dict[str, Any]:
     """Analyze conversation messages and extract metrics."""
     messages = _get_nested_value(run, ["outputs", "messages"]) or []
@@ -176,13 +229,13 @@ def _analyze_conversation(run: Dict[str, Any]) -> Dict[str, Any]:
 def enrich_run_with_thread_data(run: dict) -> dict:
     """
     Enrich a run dictionary with parsed user_id, lesson_id from thread_id,
-    and conversation analysis metrics.
+    conversation analysis metrics, and simplified message format.
     
     Args:
         run: Run dictionary from LangSmith API
         
     Returns:
-        Enhanced run dictionary with user_id, lesson_id, and conversation metrics
+        Enhanced run dictionary with user_id, lesson_id, conversation metrics, and simplified outputs
     """
     if not isinstance(run, dict):
         return run
@@ -199,5 +252,18 @@ def enrich_run_with_thread_data(run: dict) -> dict:
     # Analyze conversation
     conversation_metrics = _analyze_conversation(run)
     enriched_run.update(conversation_metrics)
+    
+    # Replace complex outputs with simplified message format
+    original_messages = _get_nested_value(run, ["outputs", "messages"]) or []
+    simplified_messages = _simplify_messages(original_messages)
+    
+    # Replace the entire outputs structure with simplified format
+    if simplified_messages:
+        enriched_run["outputs"] = {
+            "messages": simplified_messages
+        }
+    elif "outputs" in enriched_run:
+        # If no valid messages found, remove outputs entirely
+        del enriched_run["outputs"]
     
     return enriched_run
