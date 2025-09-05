@@ -26,6 +26,11 @@ class Config:
     s3_bucket_name: str = ""
     aws_region: str = "us-east-1"
     
+    # MongoDB settings
+    mongo_connection_string: str = ""
+    mongo_database_name: str = ""
+    mongo_collection_name: str = ""
+    
     # Output settings
     output_dir: str = "langsmith-exports"
     
@@ -51,5 +56,8 @@ class Config:
             filter_name=os.getenv("LS_FILTER_NAME", "tutor").strip(),
             s3_bucket_name=os.getenv("S3_BUCKET_NAME", "").strip(),
             aws_region=os.getenv("AWS_REGION", "us-east-1").strip(),
+            mongo_connection_string=os.getenv("MONGO_CONNECTION_STRING", "").strip(),
+            mongo_database_name=os.getenv("MONGO_DATABASE_NAME", "").strip(),
+            mongo_collection_name=os.getenv("MONGO_COLLECTION_NAME", "").strip(),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         )

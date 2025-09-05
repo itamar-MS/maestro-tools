@@ -9,14 +9,18 @@ on:
         default: '24'
         type: string
       output:
-        description: 'Output options (json, s3, or json,s3)'
+        description: 'Output options (json, s3, mongo, or combinations)'
         required: false
         default: 's3'
         type: choice
         options:
           - 'json'
           - 's3'
+          - 'mongo'
           - 'json,s3'
+          - 'json,mongo'
+          - 's3,mongo'
+          - 'json,s3,mongo'
       debug_limit:
         description: 'Debug mode: limit to N runs (leave empty for no limit)'
         required: false
@@ -48,6 +52,9 @@ jobs:
         echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env
         echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env
         echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> .env
+        echo "MONGO_CONNECTION_STRING=${{ secrets.MONGO_CONNECTION_STRING }}" >> .env
+        echo "MONGO_DATABASE_NAME=${{ secrets.MONGO_DATABASE_NAME }}" >> .env
+        echo "MONGO_COLLECTION_NAME=${{ secrets.MONGO_COLLECTION_NAME }}" >> .env
     
     - name: Run LangSmith export
       run: |

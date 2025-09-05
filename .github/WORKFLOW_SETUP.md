@@ -16,6 +16,9 @@ S3_BUCKET_NAME=your-bucket-name
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=your_secret_key
 AWS_REGION=us-east-1
+MONGO_CONNECTION_STRING=mongodb+srv://username:password@cluster.mongodb.net/
+MONGO_DATABASE_NAME=langsmith
+MONGO_COLLECTION_NAME=conversations
 ```
 
 ### Required Secrets:
@@ -29,6 +32,11 @@ AWS_REGION=us-east-1
 - `AWS_ACCESS_KEY_ID` - Your AWS access key
 - `AWS_SECRET_ACCESS_KEY` - Your AWS secret key
 - `AWS_REGION` - AWS region (e.g., "us-east-1")
+
+#### MongoDB Configuration (required for MongoDB upload)
+- `MONGO_CONNECTION_STRING` - MongoDB connection string (e.g., "mongodb+srv://username:password@cluster.mongodb.net/")
+- `MONGO_DATABASE_NAME` - Database name (e.g., "langsmith")
+- `MONGO_COLLECTION_NAME` - Collection name (e.g., "conversations")
 
 ## How to Use the Workflow
 

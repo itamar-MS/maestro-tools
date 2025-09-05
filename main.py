@@ -9,10 +9,11 @@ Usage:
     python main.py [options]
 
 Examples:
-    python main.py                           # Default: JSON format, last 24 hours (no S3)
+    python main.py                           # Default: JSON format, last 24 hours
     python main.py --output json             # JSON format only (explicit)
     python main.py --output s3               # JSON format + S3 upload
-    python main.py --output json,s3          # JSON format + S3 upload (same as above)
+    python main.py --output mongo            # JSON format + MongoDB upload
+    python main.py --output s3,mongo         # JSON format + S3 + MongoDB upload
     python main.py --hours 12               # Last 12 hours only
     python main.py --debug 50               # Debug mode: limit to 50 runs
 
@@ -36,6 +37,7 @@ from config import Config
 from langsmith_client import LangSmithClient
 from file_manager import write_runs_files
 from s3_uploader import S3Uploader
+from mongo_uploader import MongoUploader
 from stats_calculator import calculate_export_stats, log_export_stats
 
 
@@ -55,10 +57,11 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                           # Default: JSON format, last 24 hours (no S3)
+  %(prog)s                           # Default: JSON format, last 24 hours
   %(prog)s --output json             # JSON format only (explicit)
   %(prog)s --output s3               # JSON format + S3 upload
-  %(prog)s --output json,s3          # JSON format + S3 upload (same as above)
+  %(prog)s --output mongo            # JSON format + MongoDB upload
+  %(prog)s --output s3,mongo         # JSON format + S3 + MongoDB upload
   %(prog)s --hours 12                # Last 12 hours only
   %(prog)s --debug 50                # Debug mode: limit to 50 runs
         """
@@ -68,7 +71,7 @@ Examples:
         "--output", "-o",
         type=str,
         default="json",
-        help="Output options (comma-separated): json, s3. Default: json"
+        help="Output options (comma-separated): json, s3, mongo. Default: json"
     )
     
     
@@ -96,27 +99,30 @@ Examples:
     return parser.parse_args()
 
 
-def parse_output_options(output_arg: str) -> bool:
+def parse_output_options(output_arg: str) -> tuple[bool, bool]:
     """
-    Parse output argument to determine S3 upload flag.
+    Parse output argument to determine S3 and MongoDB upload flags.
     
     Returns:
-        upload_to_s3 boolean
+        Tuple of (upload_to_s3, upload_to_mongo) booleans
     """
     options = [opt.strip().lower() for opt in output_arg.split(",")]
     
     upload_to_s3 = False
+    upload_to_mongo = False
     
     for opt in options:
         if opt == "s3":
             upload_to_s3 = True
+        elif opt == "mongo":
+            upload_to_mongo = True
         elif opt == "json":
             # JSON is always the default format
             continue
         else:
             logging.warning("⚠️ Unknown output option '%s', ignoring", opt)
     
-    return upload_to_s3
+    return upload_to_s3, upload_to_mongo
 
 
 def main() -> int:
@@ -135,14 +141,12 @@ def main() -> int:
         setup_logging(log_level)
         
         # Parse output options
-        upload_to_s3_cli = parse_output_options(args.output)
-        
-        # Determine S3 upload: Only upload if explicitly requested
-        upload_to_s3 = upload_to_s3_cli
+        upload_to_s3, upload_to_mongo = parse_output_options(args.output)
         
         logging.info("🚀 Starting LangSmith export")
         logging.info("Output format: JSON")
         logging.info("S3 upload: %s", "enabled" if upload_to_s3 else "disabled")
+        logging.info("MongoDB upload: %s", "enabled" if upload_to_mongo else "disabled")
         
         # Calculate time window
         tz_utc = ZoneInfo("UTC")
@@ -182,6 +186,16 @@ def main() -> int:
                 logging.warning("⚠️ Only one file uploaded to S3 successfully, but local files saved.")
             else:
                 logging.warning("⚠️ S3 upload failed for both files, but local files saved.")
+        
+        # Optional MongoDB upload
+        if upload_to_mongo:
+            with MongoUploader(config) as mongo_uploader:
+                mongo_stats = mongo_uploader.upload_conversations(deduped_runs)
+                
+                if mongo_stats["inserted"] + mongo_stats["updated"] > 0:
+                    logging.info("✅ Conversations uploaded to MongoDB successfully.")
+                else:
+                    logging.warning("⚠️ MongoDB upload failed, but local files saved.")
         
         # Calculate and display statistics
         stats = calculate_export_stats(deduped_runs)

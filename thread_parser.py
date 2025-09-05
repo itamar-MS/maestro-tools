@@ -140,6 +140,97 @@ def _simplify_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return simplified_messages
 
 
+def _format_conversation_string(
+    run: Dict[str, Any], 
+    simplified_messages: List[Dict[str, Any]]
+) -> str:
+    """
+    Generate a human-readable conversation string from simplified messages.
+    
+    Args:
+        run: The original run data
+        simplified_messages: List of simplified message objects
+        
+    Returns:
+        Formatted conversation string
+    """
+    if not simplified_messages:
+        return "=== EMPTY CONVERSATION ===\n"
+    
+    # Extract metadata
+    thread_id = run.get("thread_id", "unknown")
+    user_id = run.get("user_id", "unknown")
+    lesson_id = run.get("lesson_id", "unknown")
+    
+    # Calculate conversation stats
+    total_messages = len(simplified_messages)
+    user_count = sum(1 for msg in simplified_messages if msg.get("sender") == "user")
+    assistant_count = sum(1 for msg in simplified_messages if msg.get("sender") == "assistant")
+    system_count = sum(1 for msg in simplified_messages if msg.get("sender") == "system")
+    
+    # Calculate duration
+    first_time = simplified_messages[0].get("timestamp")
+    last_time = simplified_messages[-1].get("timestamp")
+    duration_str = "unknown"
+    
+    if first_time and last_time and len(simplified_messages) > 1:
+        try:
+            first_dt = datetime.fromisoformat(first_time.replace('Z', '+00:00'))
+            last_dt = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
+            duration_hours = (last_dt - first_dt).total_seconds() / 3600
+            if duration_hours < 1:
+                duration_str = f"{duration_hours * 60:.1f} minutes"
+            else:
+                duration_str = f"{duration_hours:.1f} hours"
+        except (ValueError, TypeError):
+            duration_str = "unknown"
+    
+    # Build header
+    lines = [
+        "=== CONVERSATION ===",
+        f"Thread ID: {thread_id}",
+        f"User: {user_id} | Lesson: {lesson_id}",
+        f"Duration: {duration_str} | Messages: {total_messages} ({user_count} user, {assistant_count} assistant, {system_count} system)",
+        ""
+    ]
+    
+    # Format each message
+    for msg in simplified_messages:
+        timestamp_str = msg.get("timestamp", "")
+        sender = msg.get("sender", "unknown").upper()
+        message_content = msg.get("message", "")
+        time_since_previous = msg.get("time_since_previous_seconds")
+        
+        # Format timestamp for display (remove timezone info for cleaner look)
+        display_time = "unknown"
+        if timestamp_str:
+            try:
+                dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                display_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                display_time = timestamp_str
+        
+        # Format time since previous
+        time_suffix = ""
+        if time_since_previous is not None:
+            if time_since_previous < 60:
+                time_suffix = f" (+{time_since_previous:.1f}s)"
+            elif time_since_previous < 3600:
+                time_suffix = f" (+{time_since_previous/60:.1f}m)"
+            else:
+                time_suffix = f" (+{time_since_previous/3600:.1f}h)"
+        
+        # Add message
+        lines.append(f"[{display_time}] {sender}{time_suffix}:")
+        lines.append(message_content)
+        lines.append("")  # Empty line between messages
+    
+    # Add footer
+    lines.append("=== END CONVERSATION ===")
+    
+    return "\n".join(lines)
+
+
 def _analyze_conversation(run: Dict[str, Any]) -> Dict[str, Any]:
     """Analyze conversation messages and extract metrics."""
     messages = _get_nested_value(run, ["outputs", "messages"]) or []
@@ -253,17 +344,19 @@ def enrich_run_with_thread_data(run: dict) -> dict:
     conversation_metrics = _analyze_conversation(run)
     enriched_run.update(conversation_metrics)
     
-    # Replace complex outputs with simplified message format
+    # Process messages for simplified format
     original_messages = _get_nested_value(run, ["outputs", "messages"]) or []
     simplified_messages = _simplify_messages(original_messages)
     
-    # Replace the entire outputs structure with simplified format
+    # Add simplified conversation format and conversation string
     if simplified_messages:
-        enriched_run["outputs"] = {
+        enriched_run["conversation_json"] = {
             "messages": simplified_messages
         }
-    elif "outputs" in enriched_run:
-        # If no valid messages found, remove outputs entirely
-        del enriched_run["outputs"]
+        # Add human-readable conversation string
+        enriched_run["conversation_str"] = _format_conversation_string(enriched_run, simplified_messages)
+        
+        # Keep original outputs intact (will be preserved in MongoDB)
+        # For JSON files, we'll remove outputs in file_manager.py based on file type
     
     return enriched_run
