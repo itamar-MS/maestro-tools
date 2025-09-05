@@ -11,7 +11,7 @@ on:
       output:
         description: 'Output options (json, s3, mongo, or combinations)'
         required: false
-        default: 's3'
+        default: 'mongo'
         type: choice
         options:
           - 'json'
