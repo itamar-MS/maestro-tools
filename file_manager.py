@@ -38,20 +38,23 @@ def write_runs_files(runs: List[Dict[str, Any]], output_dir: str) -> tuple[str, 
     summary_file_name = f"{timestamp}-langchain-runs-summary.txt"
     summary_file_path = os.path.join(output_dir, summary_file_name)
     
-    # Create summary runs without outputs field
+    # Full runs keep everything (outputs, conversation_json, conversation_str)
+    full_runs = runs  # Keep all fields including outputs
+    
+    # Create summary runs without outputs and conversation_json fields
     summary_runs = []
     for run in runs:
         if isinstance(run, dict):
-            summary_run = {k: v for k, v in run.items() if k != "outputs"}
+            summary_run = {k: v for k, v in run.items() if k not in ["outputs", "conversation_json"]}
             summary_runs.append(summary_run)
         else:
             summary_runs.append(run)
     
-    # Write full file
+    # Write full file (with outputs, conversation_json, and conversation_str)
     with open(full_file_path, "w", encoding="utf-8") as f:
-        json.dump(runs, f, ensure_ascii=False, indent=2)
+        json.dump(full_runs, f, ensure_ascii=False, indent=2)
     
-    # Write summary file
+    # Write summary file (without outputs and conversation_json)
     with open(summary_file_path, "w", encoding="utf-8") as f:
         json.dump(summary_runs, f, ensure_ascii=False, indent=2)
     
