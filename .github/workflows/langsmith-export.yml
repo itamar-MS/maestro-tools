@@ -1,6 +1,8 @@
 name: LangSmith Export
 
 on:
+  schedule:
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       hours:
@@ -57,17 +59,18 @@ jobs:
         echo "MONGO_COLLECTION_NAME=${{ secrets.MONGO_COLLECTION_NAME }}" >> .env
     
     - name: Run LangSmith export
+      env:
+        HOURS: ${{ inputs.hours || '2' }}
+        OUTPUT: ${{ inputs.output || 'mongo' }}
+        DEBUG_LIMIT: ${{ inputs.debug_limit }}
       run: |
-        # Build command with inputs
-        CMD="python3 main.py --output ${{ inputs.output }} --hours ${{ inputs.hours }}"
-        
-        # Add debug limit if provided
-        if [ -n "${{ inputs.debug_limit }}" ]; then
-          CMD="$CMD --debug ${{ inputs.debug_limit }}"
+        # Default HOURS to 2 when triggered by schedule (no inputs)
+        CMD="python3 main.py --output "$OUTPUT" --hours "$HOURS""
+        if [ -n "$DEBUG_LIMIT" ]; then
+          CMD="$CMD --debug $DEBUG_LIMIT"
         fi
-        
         echo "Running: $CMD"
-        $CMD
+        eval $CMD
     
     - name: Upload artifacts (if not using S3)
       if: ${{ !contains(inputs.output, 's3') }}
