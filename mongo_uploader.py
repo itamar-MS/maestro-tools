@@ -79,7 +79,8 @@ class MongoUploader:
             return {"inserted": 0, "updated": 0, "errors": 0}
         
         stats = {"inserted": 0, "updated": 0, "errors": 0}
-        current_time = datetime.now(ZoneInfo("UTC")).isoformat()
+        # Use a datetime object so MongoDB stores as Date type
+        current_time = datetime.now(ZoneInfo("UTC"))
         
         for run in runs:
             if not isinstance(run, dict):
@@ -117,7 +118,7 @@ class MongoUploader:
         self._log_upload_stats(stats)
         return stats
     
-    def _prepare_document(self, run: Dict[str, Any], current_time: str) -> Dict[str, Any]:
+    def _prepare_document(self, run: Dict[str, Any], current_time: datetime) -> Dict[str, Any]:
         """
         Prepare a run document for MongoDB storage.
         
@@ -131,9 +132,40 @@ class MongoUploader:
         # Create a copy and add MongoDB metadata
         doc = run.copy()
         
-        # Add MongoDB-specific fields
+        # Add MongoDB-specific fields (as datetime objects)
         doc["mongo_updated_at"] = current_time
         doc["mongo_created_at"] = doc.get("mongo_created_at", current_time)  # Preserve original creation time
+
+        # Convert known timestamp fields to datetime so Mongo stores them as Date type
+        def _ensure_datetime(value: Any) -> Optional[datetime]:
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str) and value:
+                try:
+                    # Support trailing Z and timezone info
+                    dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    if dt.tzinfo is None:
+                        try:
+                            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                        except Exception:
+                            pass
+                    return dt
+                except Exception:
+                    return None
+            return None
+
+        for field_name in [
+            "mongo_updated_at",
+            "mongo_created_at",
+            "first_msg_time",
+            "last_msg_time",
+            "start_time",
+            "end_time",
+        ]:
+            if field_name in doc and doc[field_name] is not None:
+                converted = _ensure_datetime(doc[field_name])
+                if converted is not None:
+                    doc[field_name] = converted
         
         # Ensure thread_id is present and clean
         doc["thread_id"] = str(doc.get("thread_id", ""))
